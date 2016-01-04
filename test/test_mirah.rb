@@ -78,7 +78,7 @@ class TestParsing < Test::Unit::TestCase
   def assert_parse(expected, text)
     ast = parse(text)
     str = AstPrinter.new.scan(ast, ast)
-    assert_equal(expected, str)
+    assert_equal(expected, str, "expected '#{text}' to be converted")
   end
 
   def assert_fails(text)
@@ -139,6 +139,26 @@ EOF
     assert_equal(2, ast.position.start_line)
     assert_equal(3, ast.position.start_column)
     assert_equal(2, ast.position.end_line)
+    assert_equal(6, ast.position.end_column)
+    assert_equal("TestParsing-1", ast.position.source.name)
+  end
+
+  def test_position_after_multiline_sstring_literal
+    ast = parse("SOMECONST = \'\n\n\n\'\n  foo  ").body.get(1)
+    assert_equal("foo", ast.name.identifier)
+    assert_equal(5, ast.position.start_line)
+    assert_equal(3, ast.position.start_column)
+    assert_equal(5, ast.position.end_line)
+    assert_equal(6, ast.position.end_column)
+    assert_equal("TestParsing-1", ast.position.source.name)
+  end
+
+  def test_position_after_multiline_dstring_literal
+    ast = parse("SOMECONST = \"\n\n\n\"\n  foo  ").body.get(1)
+    assert_equal("foo", ast.name.identifier)
+    assert_equal(5, ast.position.start_line)
+    assert_equal(3, ast.position.start_column)
+    assert_equal(5, ast.position.end_line)
     assert_equal(6, ast.position.end_column)
     assert_equal("TestParsing-1", ast.position.source.name)
   end
@@ -357,6 +377,77 @@ EOF
     assert_fails("if a;elsif end")
   end
 
+  def test_case
+    # no case arg
+    # single when no body
+    assert_parse(
+      "[Script, [[Case, null, [[WhenClause, [[VCall, [SimpleString, a]]], []]], []]]]",
+      "case; when a; end")
+    # single when body
+    assert_parse(
+      "[Script, [[Case, null, [[WhenClause, [[VCall, [SimpleString, a]]], [[VCall, [SimpleString, b]]]]], []]]]",
+      "case; when a; b end")
+    # multiple when
+    assert_parse(
+      "[Script, [[Case, null, " +
+        "[[WhenClause, [[VCall, [SimpleString, a]]], [[VCall, [SimpleString, b]]]]," +
+        " [WhenClause, [[VCall, [SimpleString, c]]], [[VCall, [SimpleString, d]]]]], []]]]",
+      "case; when a; b; when c; d end")
+    # multiple when args
+    assert_parse(
+      "[Script, [[Case, null, [[WhenClause, [[VCall, [SimpleString, a]], [VCall, [SimpleString, b]]], []]], []]]]",
+      "case; when a, b; end")
+    # multiple when args and body
+    assert_parse(
+      "[Script, [[Case, null, " +
+        "[[WhenClause, [[VCall, [SimpleString, a]], [VCall, [SimpleString, b]]], [[VCall, [SimpleString, c]]]]], []]]]",
+      "case; when a, b; c end")
+    # when arg, else
+    assert_parse(
+      "[Script, [[Case, null, [[WhenClause, [[VCall, [SimpleString, a]]], []]], []]]]",
+      "case; when a; else; end")
+    # when arg, else, with body
+    assert_parse(
+      "[Script, [[Case, null, [[WhenClause, [[VCall, [SimpleString, a]]], []]], [[VCall, [SimpleString, b]]]]]]",
+      "case; when a; else; b end")
+    # case arg, when arg
+    assert_parse(
+      "[Script, [[Case, [VCall, [SimpleString, foo]], [[WhenClause, [[VCall, [SimpleString, a]]], []]], []]]]",
+      "case foo; when a; end")
+
+    # case arg nl when arg
+    assert_parse(
+      "[Script, [[Case, [VCall, [SimpleString, foo]], [[WhenClause, [[VCall, [SimpleString, a]]], []]], []]]]",
+      "case foo
+       when a; end")
+
+    # assign from case
+    assert_parse(
+      "[Script, [[LocalAssignment, [SimpleString, x], " +
+      "[Case, null, [[WhenClause, [[VCall, [SimpleString, a]]], [[VCall, [SimpleString, b]]]]], []]]]]",
+      "x = case; when a; b; end")
+
+    # when literal array
+    assert_parse(
+      "[Script, [[Case, [VCall, [SimpleString, foo]], [[WhenClause, [[Array, [[VCall, [SimpleString, a]]]]], []]], []]]]",
+      "case foo; when [a]; end")
+
+    # case;end
+    # case; else
+    # TODO assert error msgs
+    assert_fails("case; end")
+    # when no args
+    assert_fails("case; when; end")
+    # when no args; then
+    assert_fails("case; when then end")
+    # no when only else
+    assert_fails("case; else; end")
+    # when w/ args, when no args
+    assert_fails("case; when a; when end")
+    # case arg followed by non-when statement
+    assert_fails("case; a; when a; when end")
+  end
+
   def test_loop
     assert_parse("[Script, [[Loop, [], [Boolean, true], [], [], []]]]", 'while true do end')
     assert_parse("[Script, [[Loop, [], [VCall, [SimpleString, a]], [], [[VCall, [SimpleString, b]]], []]]]", 'while a do b end')
@@ -369,7 +460,7 @@ EOF
 
   def test_def
     names = %w(foo bar? baz! def= rescue Class & | ^ < > + - * / % ! ~ <=> ==
-               === =~ !~ <= >= << <<< >> != ** []= [] +@ -@)
+               === =~ !~ <= >= << >>> >> != ** []= [] +@ -@)
     names.each do |name|
       assert_parse("[Script, [[MethodDefinition, [SimpleString, #{name}], [Arguments, [RequiredArgumentList], [OptionalArgumentList], null, [RequiredArgumentList], null], null, [[Fixnum, 1]], [AnnotationList]]]]",
                    "def #{name}; 1; end")
@@ -382,11 +473,15 @@ EOF
                  "def foo a; 1; end")
     assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList, [RequiredArgument, [SimpleString, a], [Constant, [SimpleString, String]]]], [OptionalArgumentList], null, [RequiredArgumentList], null], null, [[Fixnum, 1]], [AnnotationList]]]]",
                  "def foo(a:String); 1; end")
+    assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList, [RequiredArgument, [SimpleString, a], [Colon2, [Colon2, [Constant, [SimpleString, java]], [Constant, [SimpleString, lang]]], [Constant, [SimpleString, String]]]]], [OptionalArgumentList], null, [RequiredArgumentList], null], null, [[Fixnum, 1]], [AnnotationList]]]]",
+                 "def foo(a:java.lang.String); 1; end")
+    assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList, [RequiredArgument, [SimpleString, a], [Colon2, [Colon2, [Constant, [SimpleString, java]], [Constant, [SimpleString, lang]]], [Constant, [SimpleString, String]]]]], [OptionalArgumentList], null, [RequiredArgumentList], null], null, [[Fixnum, 1]], [AnnotationList]]]]",
+                 "def foo(a:java::lang::String); 1; end")
     assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList, [RequiredArgument, [SimpleString, a], null], [RequiredArgument, [SimpleString, b], null]], [OptionalArgumentList], null, [RequiredArgumentList], null], null, [[Fixnum, 1]], [AnnotationList]]]]",
                  "def foo(a, b); 1; end")
     assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList], [OptionalArgumentList, [OptionalArgument, [SimpleString, a], null, [Fixnum, 1]]], null, [RequiredArgumentList], null], null, [[Fixnum, 1]], [AnnotationList]]]]",
                  "def foo(a = 1); 1; end")
-    assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList], [OptionalArgumentList, [OptionalArgument, [SimpleString, a], [SimpleString, int], [Fixnum, 1]]], null, [RequiredArgumentList], null], null, [[Fixnum, 1]], [AnnotationList]]]]",
+    assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList], [OptionalArgumentList, [OptionalArgument, [SimpleString, a], [Constant, [SimpleString, int]], [Fixnum, 1]]], null, [RequiredArgumentList], null], null, [[Fixnum, 1]], [AnnotationList]]]]",
                  "def foo(a:int = 1); 1; end")
     assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList], [OptionalArgumentList, [OptionalArgument, [SimpleString, a], null, [Fixnum, 1]], [OptionalArgument, [SimpleString, b], null, [Fixnum, 2]]], null, [RequiredArgumentList], null], null, [[Fixnum, 1]], [AnnotationList]]]]",
                  "def foo(a = 1, b=2); 1; end")
@@ -418,9 +513,9 @@ EOF
                  "def foo(*c, d, &e); 1; end")
     assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList], [OptionalArgumentList], [RestArgument, [SimpleString, c], null], [RequiredArgumentList], [BlockArgument, [SimpleString, e], null]], null, [[Fixnum, 1]], [AnnotationList]]]]",
                  "def foo(*c, &e); 1; end")
-    assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList, [RequiredArgument, [SimpleString, a], null]], [OptionalArgumentList], null, [RequiredArgumentList], null], [SimpleString, int], [[Fixnum, 1]], [AnnotationList]]]]",
+    assert_parse("[Script, [[MethodDefinition, [SimpleString, foo], [Arguments, [RequiredArgumentList, [RequiredArgument, [SimpleString, a], null]], [OptionalArgumentList], null, [RequiredArgumentList], null], [Constant, [SimpleString, int]], [[Fixnum, 1]], [AnnotationList]]]]",
                  "def foo(a):int; 1; end")
-    assert_parse("[Script, [[MethodDefinition, [SimpleString, bar], [Arguments, [RequiredArgumentList], [OptionalArgumentList], null, [RequiredArgumentList], null], [SimpleString, int], [[Fixnum, 1]], [AnnotationList]]]]",
+    assert_parse("[Script, [[MethodDefinition, [SimpleString, bar], [Arguments, [RequiredArgumentList], [OptionalArgumentList], null, [RequiredArgumentList], null], [Constant, [SimpleString, int]], [[Fixnum, 1]], [AnnotationList]]]]",
                  "def bar:int; 1; end")
     assert_fails("def foo(*a, *b);end")
     assert_fails("def foo(&a, &b);end")
@@ -580,6 +675,8 @@ EOF
      assert_parse("[Script, [[Super, [[VCall, [SimpleString, a]]], [Block, null, [[VCall, [SimpleString, b]]]]]]]", "super a do;b;end")
      assert_parse("[Script, [[Super, [[Call, [FunctionalCall, [SimpleString, a], [], [Block, null, [[VCall, [SimpleString, b]]]]], [SimpleString, c], [], null]], null]]]", "super a {b}.c")
      assert_parse("[Script, [[Call, [Super, [[VCall, [SimpleString, a]]], [Block, null, [[VCall, [SimpleString, b]]]]], [SimpleString, c], [], null]]]", "super a do;b;end.c")
+     assert_parse("[Script, [[FunctionalCall, [SimpleString, do_call], [[FunctionalCall, [SimpleString, curly_call], [], [Block, null, [[VCall, [SimpleString, curlyblock]]]]]], [Block, null, [[VCall, [SimpleString, doblock]]]]]]]",
+                  "do_call curly_call {curlyblock} do;doblock;end")
    end
 
    def test_opt_nl
@@ -587,8 +684,12 @@ EOF
                   "{\n'a' => 'b', c:\nd\n}")
    end
 
-   def test_ne
+   def test_ne_op
      assert_parse("[Script, [[Call, [VCall, [SimpleString, foo]], [SimpleString, !=], [[VCall, [SimpleString, bar]]], null]]]", "foo!=bar")
+   end
+
+   def test_nee_op
+     assert_parse("[Script, [[Call, [VCall, [SimpleString, foo]], [SimpleString, !==], [[VCall, [SimpleString, bar]]], null]]]", "foo!==bar")
    end
 
    def test_command

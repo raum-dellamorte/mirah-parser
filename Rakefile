@@ -26,7 +26,7 @@ end
 
 file_create 'javalib/mirahc.jar' do
   require 'open-uri'
-  url = 'http://search.maven.org/remotecontent?filepath=org/mirah/mirah/0.1.3/mirah-0.1.3.jar'
+  url = 'https://search.maven.org/remotecontent?filepath=org/mirah/mirah/0.1.3/mirah-0.1.3.jar'
 
   puts "Downloading mirahc.jar from #{url}"
 
@@ -141,19 +141,7 @@ end
 
 file 'build/mirahparser/impl/Mirah.mirah' => 'src/mirahparser/impl/Mirah.mmeta' do
   ant.mkdir 'dir' => 'build/mirahparser/impl'
-  runjava 'javalib/mmeta.jar', '--tpl', 'node=src/mirahparser/impl/node.xtm', 'src/mirahparser/impl/Mirah.mmeta', 'build/mirahparser/impl/Mirah.mirah.in'
-
-  # This is an ugly hack, but I can't get mmeta to build right now
-  open('build/mirahparser/impl/Mirah.mirah.in') do |fin|
-    open('build/mirahparser/impl/Mirah.mirah', 'w') do |out|
-      out.write("package mirahparser.impl\n")
-      fin.each_line do |line|
-        unless line =~ /^\s+throws RuleFailure/
-          out.write(line)
-        end
-      end
-    end
-  end
+  runjava 'javalib/mmeta.jar', '--tpl', 'node=src/mirahparser/impl/node.xtm', 'src/mirahparser/impl/Mirah.mmeta', 'build/mirahparser/impl/Mirah.mirah'
 end
 
 directory 'dist'
